@@ -21,13 +21,15 @@ button.alt{background:var(--in);color:var(--tx)}
 button.full{width:100%}
 button:disabled{opacity:.4;cursor:default}
 :focus-visible{outline:2px solid var(--tx);outline-offset:2px}
-.row{display:flex;gap:8px}.row input{flex:1}
+.row{display:flex;gap:8px}.row input{flex:1}.row button{flex:1}
 .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px}
-.grid div{background:var(--in);border-radius:8px;padding:9px 2px;text-align:center;font-size:12.5px;overflow-wrap:anywhere}
+.grid div{background:var(--in);border-radius:8px;padding:9px 2px;text-align:center;font-size:12.5px;overflow-wrap:anywhere;cursor:pointer;user-select:none}
 .grid .hit{background:var(--ac);color:#2a1700;font-weight:600}
-.grid .pick{cursor:pointer;outline:1px dashed var(--ac)}
+.grid .pick{outline:1px dashed var(--ac)}
+.grid .x{text-decoration:line-through;opacity:.3}
 .p{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #ffffff1a}
 .p:last-child{border:0}
+.rd{font-size:13px;color:var(--mu);padding-top:8px}
 .mu{color:var(--mu)}.bad{color:var(--bad)}.c{text-align:center}
 .big{font-size:26px;font-weight:800;text-align:center;margin:8px 0}
 .off{opacity:.45}
@@ -39,8 +41,8 @@ a{color:var(--ac);cursor:pointer}
 <script src="/socket.io/socket.io.js"></script>
 <script>
 const app = document.getElementById('app'), s = io();
-const pid = localStorage.pid || (localStorage.pid = Math.random().toString(36).slice(2) + Date.now().toString(36));
-let name = localStorage.name || '', S = null, rooms = [], err = '';
+const pid = sessionStorage.pid || (sessionStorage.pid = Math.random().toString(36).slice(2) + Date.now().toString(36));
+let name = sessionStorage.name || '', S = null, rooms = [], err = '', crossed = new Set(), cr = 0;
 const esc = t => String(t).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
 const $ = id => document.getElementById(id);
 
@@ -50,11 +52,18 @@ s.on('connect', hello);
 s.on('state', x => { S = x; err = ''; draw(); });
 s.on('rooms', r => { rooms = r; const l = $('list'); if (l) l.innerHTML = listHtml(); });
 
-function login(e) { e.preventDefault(); const v = $('n').value.trim(); if (!v) return; name = localStorage.name = v; hello(); draw(); }
-function logout() { localStorage.removeItem('name'); name = ''; draw(); }
+function login(e) { e.preventDefault(); const v = $('n').value.trim(); if (!v) return; name = sessionStorage.name = v; localStorage.last = v; hello(); draw(); }
+function logout() { sessionStorage.removeItem('name'); name = ''; draw(); }
 function leave() { send('leave'); S = null; draw(); }
 function join(c) { err = ''; send('join', c.trim().toUpperCase()); }
 function clue(e) { e.preventDefault(); const v = $('cl').value.trim(); if (v) send('clue', v); }
+function cell(el) {
+  const w = el.textContent;
+  if (S.phase === 'guess' && S.role === 'chameleon') { if (confirm('Guess "' + w + '"?')) send('guess', w); return; }
+  if (S.phase === 'result') return;
+  crossed.has(w) ? crossed.delete(w) : crossed.add(w);
+  el.classList.toggle('x');
+}
 
 const title = '<h1>Chameleon</h1>';
 const listHtml = () => rooms.length
@@ -63,7 +72,7 @@ const listHtml = () => rooms.length
 
 function draw() {
   if (!name) {
-    app.innerHTML = `${title}<form class="card" onsubmit="login(event)"><label for="n">Choose a name to play with</label><input id="n" maxlength="16" placeholder="Your name" autofocus autocomplete="off"><button class="full">Continue</button></form>`;
+    app.innerHTML = `${title}<form class="card" onsubmit="login(event)"><label for="n">Choose a name to play with</label><input id="n" maxlength="16" placeholder="Your name" value="${esc(localStorage.last || '')}" autofocus autocomplete="off"><button class="full">Continue</button></form>`;
   } else if (!S) {
     app.innerHTML = `${title}<p class="c mu">Playing as <b>${esc(name)}</b>. <a onclick="logout()">Change name</a></p>
 <div class="card"><button class="full" onclick="send('create')">Host a new game</button></div>
@@ -75,27 +84,36 @@ function draw() {
 function room() {
   const x = S, host = x.host === x.me, pl = Object.fromEntries(x.players.map(p => [p.id, p]));
   const nm = id => esc(pl[id] ? pl[id].name : '?');
-  const me = pl[x.me], isCham = x.role === 'chameleon';
-  const lobby = x.phase === 'lobby';
+  const me = pl[x.me], isCham = x.role === 'chameleon', lobby = x.phase === 'lobby';
+  if (x.round !== cr) { cr = x.round; crossed = new Set(); }
   let h = `${title}<p class="c mu">Game code <span class="code">${x.code}</span> &nbsp; <a onclick="leave()">Leave</a></p>`;
 
-  h += `<div class="card">${x.players.map(p => `<div class="p${p.on ? '' : ' off'}"><span>${esc(p.name)}${p.id === x.host ? ' (host)' : ''}${p.id === x.me ? ' (you)' : ''}</span><span>${!lobby && x.phase === 'vote' && p.voted ? 'voted · ' : ''}${p.score} pts</span></div>`).join('')}</div>`;
+  h += `<div class="card">${x.players.map(p => `<div class="p${p.on ? '' : ' off'}"><span>${esc(p.name)}${p.id === x.host ? ' (host)' : ''}${p.id === x.me ? ' (you)' : ''}</span><span>${x.phase === 'vote' && p.voted ? 'voted · ' : ''}${p.score} pts</span></div>`).join('')}</div>`;
 
   if (lobby) {
-    h += `<div class="card">${host
-      ? `<button class="full" ${x.players.length < 3 ? 'disabled' : ''} onclick="send('start')">Start game</button><p class="mu c">${x.players.length < 3 ? 'Waiting for at least 3 players. Share the code above.' : 'Ready when you are.'}</p>`
-      : '<p class="mu c">Waiting for the host to start.</p>'}</div>`;
+    h += `<div class="card"><b>Clue rounds</b>${host
+      ? `<div class="row" style="margin:8px 0">${[1, 2, 3].map(n => `<button class="${x.rounds === n ? '' : 'alt'}" onclick="send('rounds',${n})">${n}</button>`).join('')}</div>
+         <button class="full" ${x.players.length < 3 ? 'disabled' : ''} onclick="send('start')">Start game</button>
+         <p class="mu c">${x.players.length < 3 ? 'Waiting for at least 3 players. Share the code above.' : 'Ready when you are.'}</p>`
+      : `<p class="mu">${x.rounds} per game. Waiting for the host to start.</p>`}</div>`;
   } else {
     const guessing = x.phase === 'guess' && isCham;
     h += `<div class="card"><div class="mu c">Topic</div><div class="big">${esc(x.topic)}</div>`;
     h += isCham ? '<p class="c bad"><b>You are the Chameleon.</b> Blend in and work out the word.</p>' : `<p class="c">Secret word: <b>${esc(x.word)}</b></p>`;
-    h += `<div class="grid">${x.grid.map(w => `<div class="${w === (x.word || x.secret) ? 'hit' : guessing ? 'pick' : ''}" ${guessing ? `onclick="send('guess',this.textContent)"` : ''}>${esc(w)}</div>`).join('')}</div></div>`;
+    h += `<div class="grid">${x.grid.map(w => `<div class="${w === (x.word || x.secret) ? 'hit' : guessing ? 'pick' : crossed.has(w) ? 'x' : ''}" onclick="cell(this)">${esc(w)}</div>`).join('')}</div>`;
+    h += `<p class="mu c" style="font-size:13px;margin:8px 0 0">${guessing ? 'Tap the word you think the others had.' : x.phase === 'result' ? '' : 'Tap a square to cross it off. Only you can see this.'}</p></div>`;
 
-    if (x.clues.length) h += `<div class="card"><b>Clues</b>${x.clues.map(c => `<div class="p"><span>${nm(c.id)}</span><b>${esc(c.text)}</b></div>`).join('')}</div>`;
+    if (x.clues.length) {
+      let last = -1;
+      h += `<div class="card"><b>Clues</b>${x.clues.map(c => {
+        const head = c.rd !== last ? `<div class="rd">Round ${c.rd + 1}</div>` : ''; last = c.rd;
+        return `${head}<div class="p"><span>${nm(c.id)}</span><b>${esc(c.text)}</b></div>`;
+      }).join('')}</div>`;
+    }
 
     if (x.phase === 'clues') {
-      const cur = x.order[x.turn];
-      h += `<div class="card">${cur === x.me
+      const n = x.order.length, cur = x.order[x.turn % n], rd = Math.floor(x.turn / n) + 1;
+      h += `<div class="card"><p class="mu c" style="margin:0 0 6px">Clue round ${rd} of ${x.rounds}</p>${cur === x.me
         ? `<form onsubmit="clue(event)"><label for="cl">Your turn. Give a one-word clue.</label><input id="cl" maxlength="24" autocomplete="off" autofocus><button class="full">Send clue</button></form>`
         : `<p class="c mu">Waiting for ${nm(cur)} to give a clue.</p>`}</div>`;
     } else if (x.phase === 'vote') {
@@ -103,7 +121,7 @@ function room() {
         ? '<p class="mu">Vote locked in. Waiting for the others.</p>'
         : x.players.filter(p => p.id !== x.me && p.on).map(p => `<div class="p"><span>${esc(p.name)}</span><button onclick="send('vote','${p.id}')">Vote</button></div>`).join('')}</div>`;
     } else if (x.phase === 'guess') {
-      h += `<div class="card c"><p class="big">${nm(x.cham)} was caught.</p><p class="mu">${guessing ? 'Tap the word you think the others had.' : 'They get one guess at the secret word.'}</p>${host && !isCham ? '<button class="alt" onclick="send(\'next\')">Skip to next round</button>' : ''}</div>`;
+      h += `<div class="card c"><p class="big">${nm(x.cham)} was caught.</p><p class="mu">${guessing ? 'Pick the secret word from the grid.' : 'They get one guess at the secret word.'}</p>${host && !isCham ? '<button class="alt" onclick="send(\'next\')">Skip to next round</button>' : ''}</div>`;
     } else if (x.phase === 'result') {
       const r = x.result, g = esc(r.guess || '');
       const msg = !r.caught ? `${nm(x.cham)} got away. The Chameleon scores 2.`
