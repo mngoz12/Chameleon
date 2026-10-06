@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chameleon</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#232a5c;--sf:#2f3873;--in:#1a2048;--ac:#ff9f43;--tx:#f4f6ff;--mu:#a9b1e0;--bad:#ff7a98}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--tx);font:16px/1.4 'Bricolage Grotesque',system-ui,sans-serif;display:flex;justify-content:center;padding:20px}
+main{width:100%;max-width:540px}
+h1{font-size:44px;font-weight:800;text-align:center;margin:.4em 0 .2em;letter-spacing:-1px;background:linear-gradient(90deg,#6ee7a8,#38bdf8,#c084fc,#ff9f43,#6ee7a8);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shift 8s linear infinite}
+@keyframes shift{to{background-position:300% 0}}
+@media(prefers-reduced-motion:reduce){h1{animation:none}}
+.card{background:var(--sf);border-radius:14px;padding:16px;margin:12px 0}
+input,button{font:inherit;border:0;border-radius:10px;padding:12px 14px}
+input{width:100%;background:var(--in);color:var(--tx);margin:6px 0}
+button{background:var(--ac);color:#2a1700;font-weight:600;cursor:pointer}
+button.alt{background:var(--in);color:var(--tx)}
+button.full{width:100%}
+button:disabled{opacity:.4;cursor:default}
+:focus-visible{outline:2px solid var(--tx);outline-offset:2px}
+.row{display:flex;gap:8px}.row input{flex:1}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px}
+.grid div{background:var(--in);border-radius:8px;padding:9px 2px;text-align:center;font-size:12.5px;overflow-wrap:anywhere}
+.grid .hit{background:var(--ac);color:#2a1700;font-weight:600}
+.grid .pick{cursor:pointer;outline:1px dashed var(--ac)}
+.p{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #ffffff1a}
+.p:last-child{border:0}
+.mu{color:var(--mu)}.bad{color:var(--bad)}.c{text-align:center}
+.big{font-size:26px;font-weight:800;text-align:center;margin:8px 0}
+.off{opacity:.45}
+a{color:var(--ac);cursor:pointer}
+.code{color:var(--ac);font-weight:800;letter-spacing:4px}
+</style>
+</head>
+<body><main id="app"></main>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const app = document.getElementById('app'), s = io();
+const pid = localStorage.pid || (localStorage.pid = Math.random().toString(36).slice(2) + Date.now().toString(36));
+let name = localStorage.name || '', S = null, rooms = [], err = '';
+const esc = t => String(t).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+const $ = id => document.getElementById(id);
+
+const hello = () => name && s.emit('hello', { pid, name }, r => { if (r && r.err) { err = r.err; draw(); } });
+const send = (e, d) => s.emit(e, d, r => { if (r && r.err) { err = r.err; draw(); } });
+s.on('connect', hello);
+s.on('state', x => { S = x; err = ''; draw(); });
+s.on('rooms', r => { rooms = r; const l = $('list'); if (l) l.innerHTML = listHtml(); });
+
+function login(e) { e.preventDefault(); const v = $('n').value.trim(); if (!v) return; name = localStorage.name = v; hello(); draw(); }
+function logout() { localStorage.removeItem('name'); name = ''; draw(); }
+function leave() { send('leave'); S = null; draw(); }
+function join(c) { err = ''; send('join', c.trim().toUpperCase()); }
+function clue(e) { e.preventDefault(); const v = $('cl').value.trim(); if (v) send('clue', v); }
+
+const title = '<h1>Chameleon</h1>';
+const listHtml = () => rooms.length
+  ? rooms.map(r => `<div class="p"><span>${esc(r.host)}'s game <span class="mu">${r.n} in lobby</span></span><button onclick="join('${r.code}')">Join</button></div>`).join('')
+  : '<p class="mu">No open games right now. Host one and share the code.</p>';
+
+function draw() {
+  if (!name) {
+    app.innerHTML = `${title}<form class="card" onsubmit="login(event)"><label for="n">Choose a name to play with</label><input id="n" maxlength="16" placeholder="Your name" autofocus autocomplete="off"><button class="full">Continue</button></form>`;
+  } else if (!S) {
+    app.innerHTML = `${title}<p class="c mu">Playing as <b>${esc(name)}</b>. <a onclick="logout()">Change name</a></p>
+<div class="card"><button class="full" onclick="send('create')">Host a new game</button></div>
+<div class="card"><b>Join with a code</b><div class="row"><input id="c" maxlength="4" placeholder="Code" autocomplete="off" style="text-transform:uppercase"><button onclick="join($('c').value)">Join</button></div></div>
+<div class="card"><b>Open games</b><div id="list">${listHtml()}</div></div><p class="bad c">${esc(err)}</p>`;
+  } else room();
+}
+
+function room() {
+  const x = S, host = x.host === x.me, pl = Object.fromEntries(x.players.map(p => [p.id, p]));
+  const nm = id => esc(pl[id] ? pl[id].name : '?');
+  const me = pl[x.me], isCham = x.role === 'chameleon';
+  const lobby = x.phase === 'lobby';
+  let h = `${title}<p class="c mu">Game code <span class="code">${x.code}</span> &nbsp; <a onclick="leave()">Leave</a></p>`;
+
+  h += `<div class="card">${x.players.map(p => `<div class="p${p.on ? '' : ' off'}"><span>${esc(p.name)}${p.id === x.host ? ' (host)' : ''}${p.id === x.me ? ' (you)' : ''}</span><span>${!lobby && x.phase === 'vote' && p.voted ? 'voted · ' : ''}${p.score} pts</span></div>`).join('')}</div>`;
+
+  if (lobby) {
+    h += `<div class="card">${host
+      ? `<button class="full" ${x.players.length < 3 ? 'disabled' : ''} onclick="send('start')">Start game</button><p class="mu c">${x.players.length < 3 ? 'Waiting for at least 3 players. Share the code above.' : 'Ready when you are.'}</p>`
+      : '<p class="mu c">Waiting for the host to start.</p>'}</div>`;
+  } else {
+    const guessing = x.phase === 'guess' && isCham;
+    h += `<div class="card"><div class="mu c">Topic</div><div class="big">${esc(x.topic)}</div>`;
+    h += isCham ? '<p class="c bad"><b>You are the Chameleon.</b> Blend in and work out the word.</p>' : `<p class="c">Secret word: <b>${esc(x.word)}</b></p>`;
+    h += `<div class="grid">${x.grid.map(w => `<div class="${w === (x.word || x.secret) ? 'hit' : guessing ? 'pick' : ''}" ${guessing ? `onclick="send('guess',this.textContent)"` : ''}>${esc(w)}</div>`).join('')}</div></div>`;
+
+    if (x.clues.length) h += `<div class="card"><b>Clues</b>${x.clues.map(c => `<div class="p"><span>${nm(c.id)}</span><b>${esc(c.text)}</b></div>`).join('')}</div>`;
+
+    if (x.phase === 'clues') {
+      const cur = x.order[x.turn];
+      h += `<div class="card">${cur === x.me
+        ? `<form onsubmit="clue(event)"><label for="cl">Your turn. Give a one-word clue.</label><input id="cl" maxlength="24" autocomplete="off" autofocus><button class="full">Send clue</button></form>`
+        : `<p class="c mu">Waiting for ${nm(cur)} to give a clue.</p>`}</div>`;
+    } else if (x.phase === 'vote') {
+      h += `<div class="card"><b>Who is the Chameleon?</b>${me.voted
+        ? '<p class="mu">Vote locked in. Waiting for the others.</p>'
+        : x.players.filter(p => p.id !== x.me && p.on).map(p => `<div class="p"><span>${esc(p.name)}</span><button onclick="send('vote','${p.id}')">Vote</button></div>`).join('')}</div>`;
+    } else if (x.phase === 'guess') {
+      h += `<div class="card c"><p class="big">${nm(x.cham)} was caught.</p><p class="mu">${guessing ? 'Tap the word you think the others had.' : 'They get one guess at the secret word.'}</p>${host && !isCham ? '<button class="alt" onclick="send(\'next\')">Skip to next round</button>' : ''}</div>`;
+    } else if (x.phase === 'result') {
+      const r = x.result, g = esc(r.guess || '');
+      const msg = !r.caught ? `${nm(x.cham)} got away. The Chameleon scores 2.`
+        : r.correct ? `${nm(x.cham)} guessed ${g}, which is right. The Chameleon scores 1.`
+        : `${nm(x.cham)} guessed ${g}, which is wrong. Everyone else scores 2.`;
+      h += `<div class="card c"><p class="big">${msg}</p><p class="mu">The word was <b>${esc(x.secret)}</b>.</p>${host ? '<button class="full" onclick="send(\'next\')">Next round</button>' : '<p class="mu">Waiting for the host to start the next round.</p>'}</div>`;
+    }
+  }
+  app.innerHTML = h + `<p class="bad c">${esc(err)}</p>`;
+}
+draw();
+</script>
+</body>
+</html>
