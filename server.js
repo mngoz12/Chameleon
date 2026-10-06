@@ -1,23 +1,12 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const T = require('./topics');
 const app = express();
 const srv = http.createServer(app);
 const io = new Server(srv);
 app.use(express.static('public'));
 
-const T = {
-  'Famous Landmarks': 'Eiffel Tower,Big Ben,Statue of Liberty,Colosseum,Great Wall,Taj Mahal,Pyramids,Opera House,Stonehenge,Machu Picchu,Golden Gate,Mount Rushmore,Leaning Tower,Petra,Christ the Redeemer,Burj Khalifa',
-  'Kitchen Items': 'Whisk,Colander,Toaster,Blender,Spatula,Ladle,Kettle,Rolling Pin,Grater,Tongs,Peeler,Frying Pan,Oven Mitt,Cutting Board,Mixer,Tea Towel',
-  'Zoo Animals': 'Lion,Giraffe,Penguin,Elephant,Zebra,Monkey,Tiger,Hippo,Kangaroo,Panda,Flamingo,Gorilla,Rhino,Koala,Camel,Meerkat',
-  'Sports': 'Soccer,Tennis,Rugby,Golf,Boxing,Cricket,Swimming,Archery,Surfing,Baseball,Hockey,Skiing,Cycling,Fencing,Netball,Darts',
-  'Fruit and Veg': 'Apple,Banana,Carrot,Broccoli,Mango,Potato,Grape,Pumpkin,Lemon,Spinach,Strawberry,Onion,Pineapple,Corn,Cucumber,Peach',
-  'Jobs': 'Teacher,Doctor,Pilot,Plumber,Chef,Farmer,Lawyer,Firefighter,Electrician,Dentist,Journalist,Builder,Nurse,Mechanic,Actor,Librarian',
-  'Vehicles': 'Bicycle,Tram,Helicopter,Submarine,Tractor,Scooter,Ferry,Ambulance,Skateboard,Bus,Canoe,Motorbike,Truck,Hot Air Balloon,Train,Taxi',
-  'Clothing': 'Jeans,Scarf,Sneakers,Raincoat,Hoodie,Bikini,Tuxedo,Beanie,Overalls,Socks,Kilt,Pyjamas,Sandals,Tie,Gloves,Apron',
-  'Instruments': 'Guitar,Piano,Violin,Drums,Flute,Trumpet,Harp,Saxophone,Cello,Banjo,Tuba,Clarinet,Ukulele,Accordion,Bagpipes,Triangle',
-  'Countries': 'Australia,Brazil,Egypt,Japan,Canada,Italy,India,Mexico,Norway,Kenya,Peru,Iceland,Greece,Thailand,Spain,Chile',
-};
 const TOPICS = Object.fromEntries(Object.entries(T).map(([k, v]) => [k, v.split(',')]));
 const rooms = {};
 const pick = a => a[Math.random() * a.length | 0];
@@ -35,7 +24,7 @@ const list = () => io.emit('rooms', open());
 function view(r, id) {
   const end = r.phase === 'guess' || r.phase === 'result';
   const v = {
-    code: r.code, host: r.host, phase: r.phase, me: id,
+    code: r.code, host: r.host, phase: r.phase, me: id, rounds: r.rounds, round: r.round,
     players: Object.entries(r.players).map(([i, p]) => ({ id: i, name: p.name, score: p.score, on: p.on, voted: i in r.votes })),
   };
   if (r.phase !== 'lobby') Object.assign(v, {
@@ -62,8 +51,9 @@ function tally(r) {
 }
 function settle(r) {
   if (r.phase === 'clues') {
-    while (r.turn < r.order.length && !r.players[r.order[r.turn]].on) r.turn++;
-    if (r.turn >= r.order.length) r.phase = 'vote';
+    const n = r.order.length, end = n * r.rounds;
+    while (r.turn < end && !r.players[r.order[r.turn % n]].on) r.turn++;
+    if (r.turn >= end) r.phase = 'vote';
   }
   if (r.phase === 'vote' && Object.entries(r.players).filter(([, p]) => p.on).every(([i]) => i in r.votes)) tally(r);
 }
@@ -72,13 +62,19 @@ function begin(r) {
   const ids = Object.keys(r.players);
   r.votes = {}; r.clues = []; r.result = null;
   if (ids.length < 3) { r.phase = 'lobby'; return; }
-  r.topic = pick(Object.keys(TOPICS));
+  // topics don't repeat until all have been used
+  const keys = Object.keys(TOPICS);
+  let tp = keys.filter(k => !r.seen.includes(k));
+  if (!tp.length) { r.seen = []; tp = keys; }
+  r.topic = pick(tp); r.seen.push(r.topic);
   r.grid = TOPICS[r.topic];
   r.word = pick(r.grid);
-  r.cham = pick(ids);
+  // everyone is the Chameleon once before anyone repeats
+  let pool = ids.filter(i => !r.used.includes(i));
+  if (!pool.length) { r.used = []; pool = ids; }
+  r.cham = pick(pool); r.used.push(r.cham);
   r.order = ids.sort(() => Math.random() - 0.5);
-  r.turn = 0;
-  r.phase = 'clues';
+  r.turn = 0; r.round++; r.phase = 'clues';
 }
 
 io.on('connection', s => {
@@ -110,10 +106,10 @@ io.on('connection', s => {
     if (r) enter(r);
     cb && cb({ ok: true });
   });
-  s.on('create', (_, cb) => {
+  s.on('create', () => {
     if (!name) return;
     drop(true);
-    const r = { code: newCode(), host: pid, players: {}, phase: 'lobby', votes: {}, clues: [] };
+    const r = { code: newCode(), host: pid, players: {}, phase: 'lobby', votes: {}, clues: [], rounds: 2, round: 0, used: [], seen: [] };
     rooms[r.code] = r;
     enter(r);
   });
@@ -127,6 +123,11 @@ io.on('connection', s => {
     enter(r);
   });
   s.on('leave', () => drop(true));
+  s.on('rounds', n => {
+    const r = R();
+    if (!r || r.host !== pid || r.phase !== 'lobby') return;
+    r.rounds = Math.min(3, Math.max(1, n | 0)); push(r);
+  });
   s.on('start', (_, cb) => {
     const r = R();
     if (!r || r.host !== pid || r.phase !== 'lobby') return;
@@ -140,10 +141,12 @@ io.on('connection', s => {
   });
   s.on('clue', text => {
     const r = R();
-    if (!r || r.phase !== 'clues' || r.order[r.turn] !== pid) return;
+    if (!r || r.phase !== 'clues') return;
+    const n = r.order.length;
+    if (r.order[r.turn % n] !== pid) return;
     const t = String(text).trim().split(/\s+/)[0].slice(0, 24);
     if (!t) return;
-    r.clues.push({ id: pid, text: t }); r.turn++;
+    r.clues.push({ id: pid, text: t, rd: Math.floor(r.turn / n) }); r.turn++;
     settle(r); push(r);
   });
   s.on('vote', id => {
