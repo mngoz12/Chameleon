@@ -18,17 +18,24 @@ input,button{font:inherit;border:0;border-radius:10px;padding:12px 14px}
 input{width:100%;background:var(--in);color:var(--tx);margin:6px 0}
 button{background:var(--ac);color:#2a1700;font-weight:600;cursor:pointer}
 button.alt{background:var(--in);color:var(--tx)}
+button.sm{padding:5px 10px;font-size:13px}
 button.full{width:100%}
 button:disabled{opacity:.4;cursor:default}
 :focus-visible{outline:2px solid var(--tx);outline-offset:2px}
 .row{display:flex;gap:8px}.row input{flex:1}.row button{flex:1}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px}
-.grid div{background:var(--in);border-radius:8px;padding:9px 2px;text-align:center;font-size:12.5px;overflow-wrap:anywhere;cursor:pointer;user-select:none}
-.grid .hit{background:var(--ac);color:#2a1700;font-weight:600}
-.grid .pick{outline:1px dashed var(--ac)}
-.grid .x{text-decoration:line-through;opacity:.3}
+.topic{background:#f3f0ff;color:#1a2048;border:3px solid #6ee7a8}
+.topic .mu{color:#5b54a6}
+.topic .code{color:#c2410c;font-size:30px;letter-spacing:3px}
+.g{display:grid;grid-template-columns:22px repeat(4,1fr);gap:5px;margin-top:10px}
+.g i{font-style:normal;text-align:center;color:#5b54a6;font-weight:800;font-size:13px;align-self:center}
+.g div{background:#dcd6ff;border-radius:8px;padding:9px 2px;text-align:center;font-size:12.5px;overflow-wrap:anywhere;cursor:pointer;user-select:none}
+.g .hit{background:var(--ac);color:#2a1700;font-weight:700}
+.g .pick{outline:2px dashed #c2410c}
+.g .x{text-decoration:line-through;opacity:.3}
 .p{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #ffffff1a}
 .p:last-child{border:0}
+.p .r{display:flex;align-items:center;gap:8px}
+.turn{color:var(--ac);font-weight:800}
 .rd{font-size:13px;color:var(--mu);padding-top:8px}
 .mu{color:var(--mu)}.bad{color:var(--bad)}.c{text-align:center}
 .big{font-size:26px;font-weight:800;text-align:center;margin:8px 0}
@@ -70,6 +77,20 @@ const listHtml = () => rooms.length
   ? rooms.map(r => `<div class="p"><span>${esc(r.host)}'s game <span class="mu">${r.n} in lobby</span></span><button onclick="join('${r.code}')">Join</button></div>`).join('')
   : '<p class="mu">No open games right now. Host one and share the code.</p>';
 
+function gridHtml(x, guessing) {
+  const hitWord = x.word || x.secret;
+  let h = '<div class="g"><i></i>' + [...'ABCD'].map(l => `<i>${l}</i>`).join('');
+  for (let r = 0; r < 4; r++) {
+    h += `<i>${r + 1}</i>`;
+    for (let c = 0; c < 4; c++) {
+      const w = x.grid[r * 4 + c];
+      const k = w === hitWord ? 'hit' : guessing ? 'pick' : crossed.has(w) ? 'x' : '';
+      h += `<div class="${k}" onclick="cell(this)">${esc(w)}</div>`;
+    }
+  }
+  return h + '</div>';
+}
+
 function draw() {
   if (!name) {
     app.innerHTML = `${title}<form class="card" onsubmit="login(event)"><label for="n">Choose a name to play with</label><input id="n" maxlength="16" placeholder="Your name" value="${esc(localStorage.last || '')}" autofocus autocomplete="off"><button class="full">Continue</button></form>`;
@@ -86,21 +107,25 @@ function room() {
   const nm = id => esc(pl[id] ? pl[id].name : '?');
   const me = pl[x.me], isCham = x.role === 'chameleon', lobby = x.phase === 'lobby';
   if (x.round !== cr) { cr = x.round; crossed = new Set(); }
+  const cur = x.phase === 'clues' ? x.order[x.turn % x.order.length] : null;
   let h = `${title}<p class="c mu">Game code <span class="code">${x.code}</span> &nbsp; <a onclick="leave()">Leave</a></p>`;
 
-  h += `<div class="card">${x.players.map(p => `<div class="p${p.on ? '' : ' off'}"><span>${esc(p.name)}${p.id === x.host ? ' (host)' : ''}${p.id === x.me ? ' (you)' : ''}</span><span>${x.phase === 'vote' && p.voted ? 'voted · ' : ''}${p.score} pts</span></div>`).join('')}</div>`;
+  h += `<div class="card">${x.players.map(p => `<div class="p${p.on ? '' : ' off'}"><span class="${p.id === cur ? 'turn' : ''}">${p.id === cur ? '> ' : ''}${esc(p.name)}${p.bot ? ' (bot)' : ''}${p.id === x.host ? ' (host)' : ''}${p.id === x.me ? ' (you)' : ''}</span><span class="r">${x.phase === 'vote' && p.voted ? 'voted · ' : ''}${p.score} pts${lobby && host && p.bot ? ` <button class="alt sm" onclick="send('rmbot','${p.id}')">Remove</button>` : ''}</span></div>`).join('')}</div>`;
 
   if (lobby) {
     h += `<div class="card"><b>Clue rounds</b>${host
       ? `<div class="row" style="margin:8px 0">${[1, 2, 3].map(n => `<button class="${x.rounds === n ? '' : 'alt'}" onclick="send('rounds',${n})">${n}</button>`).join('')}</div>
+         <button class="alt full" style="margin-bottom:8px" onclick="send('addbot')">Add a bot</button>
          <button class="full" ${x.players.length < 3 ? 'disabled' : ''} onclick="send('start')">Start game</button>
-         <p class="mu c">${x.players.length < 3 ? 'Waiting for at least 3 players. Share the code above.' : 'Ready when you are.'}</p>`
+         <p class="mu c">${x.players.length < 3 ? 'Waiting for at least 3 players. Share the code above or add bots.' : 'Ready when you are.'}</p>`
       : `<p class="mu">${x.rounds} per game. Waiting for the host to start.</p>`}</div>`;
   } else {
     const guessing = x.phase === 'guess' && isCham;
-    h += `<div class="card"><div class="mu c">Topic</div><div class="big">${esc(x.topic)}</div>`;
-    h += isCham ? '<p class="c bad"><b>You are the Chameleon.</b> Blend in and work out the word.</p>' : `<p class="c">Secret word: <b>${esc(x.word)}</b></p>`;
-    h += `<div class="grid">${x.grid.map(w => `<div class="${w === (x.word || x.secret) ? 'hit' : guessing ? 'pick' : crossed.has(w) ? 'x' : ''}" onclick="cell(this)">${esc(w)}</div>`).join('')}</div>`;
+    h += `<div class="card topic"><div class="mu c">Topic</div><div class="big">${esc(x.topic)}</div>`;
+    h += isCham
+      ? '<p class="c" style="color:#c2410c"><b>You are the Chameleon.</b> You have no code. Blend in and work out the word.</p>'
+      : `<p class="c" style="margin:4px 0">Your code <span class="code">${x.pos}</span></p><p class="mu c" style="margin:0;font-size:13px">Find it on the card. Don't make it too obvious.</p>`;
+    h += gridHtml(x, guessing);
     h += `<p class="mu c" style="font-size:13px;margin:8px 0 0">${guessing ? 'Tap the word you think the others had.' : x.phase === 'result' ? '' : 'Tap a square to cross it off. Only you can see this.'}</p></div>`;
 
     if (x.clues.length) {
@@ -112,22 +137,27 @@ function room() {
     }
 
     if (x.phase === 'clues') {
-      const n = x.order.length, cur = x.order[x.turn % n], rd = Math.floor(x.turn / n) + 1;
+      const rd = Math.floor(x.turn / x.order.length) + 1;
       h += `<div class="card"><p class="mu c" style="margin:0 0 6px">Clue round ${rd} of ${x.rounds}</p>${cur === x.me
         ? `<form onsubmit="clue(event)"><label for="cl">Your turn. Give a one-word clue.</label><input id="cl" maxlength="24" autocomplete="off" autofocus><button class="full">Send clue</button></form>`
         : `<p class="c mu">Waiting for ${nm(cur)} to give a clue.</p>`}</div>`;
+    } else if (x.phase === 'talk') {
+      h += `<div class="card c"><p class="big">Discuss</p><p class="mu">Who gave a clue that was too vague, or too specific? The host calls the vote when everyone is ready.</p>${host ? '<button class="full" onclick="send(\'callvote\')">Call the vote</button>' : ''}</div>`;
     } else if (x.phase === 'vote') {
       h += `<div class="card"><b>Who is the Chameleon?</b>${me.voted
-        ? '<p class="mu">Vote locked in. Waiting for the others.</p>'
+        ? '<p class="mu">Vote locked in. Votes are revealed when everyone has voted.</p>'
         : x.players.filter(p => p.id !== x.me && p.on).map(p => `<div class="p"><span>${esc(p.name)}</span><button onclick="send('vote','${p.id}')">Vote</button></div>`).join('')}</div>`;
-    } else if (x.phase === 'guess') {
-      h += `<div class="card c"><p class="big">${nm(x.cham)} was caught.</p><p class="mu">${guessing ? 'Pick the secret word from the grid.' : 'They get one guess at the secret word.'}</p>${host && !isCham ? '<button class="alt" onclick="send(\'next\')">Skip to next round</button>' : ''}</div>`;
-    } else if (x.phase === 'result') {
-      const r = x.result, g = esc(r.guess || '');
-      const msg = !r.caught ? `${nm(x.cham)} got away. The Chameleon scores 2.`
-        : r.correct ? `${nm(x.cham)} guessed ${g}, which is right. The Chameleon scores 1.`
-        : `${nm(x.cham)} guessed ${g}, which is wrong. Everyone else scores 2.`;
-      h += `<div class="card c"><p class="big">${msg}</p><p class="mu">The word was <b>${esc(x.secret)}</b>.</p>${host ? '<button class="full" onclick="send(\'next\')">Next round</button>' : '<p class="mu">Waiting for the host to start the next round.</p>'}</div>`;
+    } else {
+      h += `<div class="card"><b>Votes</b>${Object.entries(x.votes).map(([a, b]) => `<div class="p"><span>${nm(a)}</span><span>voted ${nm(b)}</span></div>`).join('')}</div>`;
+      if (x.phase === 'guess') {
+        h += `<div class="card c"><p class="big">${nm(x.cham)} was caught.</p><p class="mu">${guessing ? 'Pick the secret word from the grid.' : 'They get one guess at the secret word.'}</p>${host && !isCham && !pl[x.cham].bot ? '<button class="alt" onclick="send(\'next\')">Skip to next round</button>' : ''}</div>`;
+      } else {
+        const r = x.result, g = esc(r.guess || '');
+        const msg = !r.caught ? `${nm(x.cham)} got away. The Chameleon scores 3.`
+          : r.correct ? `${nm(x.cham)} guessed ${g}, which is right. The Chameleon scores 1.`
+          : `${nm(x.cham)} guessed ${g}, which is wrong. Everyone else scores 2.`;
+        h += `<div class="card c"><p class="big">${msg}</p><p class="mu">The word was <b>${esc(x.secret)}</b>.</p>${host ? '<button class="full" onclick="send(\'next\')">Next round</button>' : '<p class="mu">Waiting for the host to start the next round.</p>'}</div>`;
+      }
     }
   }
   app.innerHTML = h + `<p class="bad c">${esc(err)}</p>`;
