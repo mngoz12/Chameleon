@@ -98,16 +98,21 @@ function begin(r) {
   r.turn = 0; r.round++; r.phase = 'clues';
 }
 
-/* ---------- bot AI ---------- */
-async function ask(prompt, max = 20) {
+/* ---------- bot AI (Google Gemini) ---------- */
+async function ask(prompt) {
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: max, messages: [{ role: 'user', content: prompt }] }),
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 300, temperature: 1 },
+      }),
     });
     const d = await res.json();
-    return d.content[0].text.trim();
+    if (!res.ok) throw new Error((d.error && d.error.message) || res.status);
+    return d.candidates[0].content.parts.map(p => p.text || '').join('').trim();
   } catch (e) { console.error('bot AI error:', e.message); return null; }
 }
 const ctx = (r, id) =>
@@ -128,12 +133,12 @@ async function botVote(r, id) {
   const p = ctx(r, id) + (id === r.cham
     ? 'Vote for another player to throw suspicion off yourself.'
     : 'Decide who the Chameleon is: the player whose clue seems vague, generic or off.') + ' You cannot vote for yourself. Reply with only the exact name of one player.';
-  const a = ((await ask(p, 15)) || '').toLowerCase();
+  const a = ((await ask(p)) || '').toLowerCase();
   return others.find(i => a.includes(r.players[i].name.toLowerCase())) || pick(others);
 }
 async function botGuess(r) {
   const p = ctx(r, r.cham) + 'You were caught. Guess the secret word using the clues. Reply with only one word, exactly as written in the grid.';
-  const a = ((await ask(p, 15)) || '').toLowerCase().trim();
+  const a = ((await ask(p)) || '').toLowerCase().trim();
   return r.grid.find(w => w.toLowerCase() === a) || r.grid.find(w => a.includes(w.toLowerCase())) || pick(r.grid);
 }
 function botTick(r) {
@@ -217,7 +222,7 @@ io.on('connection', s => {
   s.on('addbot', (_, cb) => {
     const r = R();
     if (!r || r.host !== pid || r.phase !== 'lobby') return;
-    if (!process.env.ANTHROPIC_API_KEY) return cb({ err: 'Bots need ANTHROPIC_API_KEY set on the server.' });
+    if (!process.env.GEMINI_API_KEY) return cb({ err: 'Bots need GEMINI_API_KEY set on the server.' });
     if (r.seats.length >= 10) return cb({ err: 'The game is full.' });
     const used = r.seats.map(i => r.players[i].name);
     const nm = pick(BOTS.filter(n => !used.includes(n))) || 'Bot';
